@@ -198,7 +198,7 @@ border_exchange ( void )
     real_t *upper_boundary_ptr = &T(0, 1); //recv
     real_t *last_row_ptr = &T(local_size[rank], 1); //send
     real_t *lower_boundary_ptr = &T(local_size[rank] + 1, 1); //recv
-    if (rank != root    ){
+    if (rank != root){
             MPI_Send(first_row_ptr, M, MPI_DOUBLE, left_neighbor, 0, MPI_COMM_WORLD);
             MPI_Recv(upper_boundary_ptr, M, MPI_DOUBLE, left_neighbor, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     }
