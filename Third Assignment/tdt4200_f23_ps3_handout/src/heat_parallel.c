@@ -15,7 +15,7 @@
 
 typedef int64_t int_t;
 typedef double real_t;
-int rank,size;
+int rank,size, north, south, east, west;
 int dims[2] = {0};
 int coord[2], period[2] = {0};
 
@@ -28,15 +28,22 @@ int_t
     snapshot_frequency,
     *local_size = NULL;
 
+MPI_Datatype column_datatype /*North-South*/, row_datatype, grid, subgrid; //, all_column_datatype, all_row_datatype;
 
+int_t local_col,
+    local_row;
 real_t
     *temp[2] = { NULL, NULL },
     *thermal_diffusivity,
     dt;
 
-#define T(x,y)                      temp[0][(y) * (N + 2) + (x)]
-#define T_next(x,y)                 temp[1][((y) * (N + 2) + (x))]
-#define THERMAL_DIFFUSIVITY(x,y)    thermal_diffusivity[(y) * (N + 2) + (x)]
+MPI_Datatype
+        grid,
+        subgrid;
+
+#define T(x,y)                      temp[0][(y) * (local_col + 2) + (x)]
+#define T_next(x,y)                 temp[1][((y) * (local_col + 2) + (x))]
+#define THERMAL_DIFFUSIVITY(x,y)    thermal_diffusivity[(y) * (local_col + 2) + (x)]
 
 void time_step ( void );
 void boundary_condition( void );
@@ -44,8 +51,7 @@ void border_exchange( void );
 void domain_init ( void );
 void domain_save ( int_t iteration );
 void domain_finalize ( void );
-
-
+void create_types(void);
 void
 swap ( real_t** m1, real_t** m2 )
 {
@@ -88,25 +94,27 @@ main ( int argc, char **argv )
     MPI_Bcast(&snapshot_frequency, 1, MPI_INT64_T, 0, MPI_COMM_WORLD);
     MPI_Bcast(&M, 1, MPI_INT64_T, 0, MPI_COMM_WORLD);
     
+
     MPI_Cart_coords(comm_cart,rank,2 ,coord);
-    
-   // printf("My coords are : %d %d I'm :%d\n", coord[0], coord[1], rank);
-    
+    MPI_Cart_shift(comm_cart, 1, 1, &north, &south);
+    MPI_Cart_shift(comm_cart, 0, 1, &west, &east);
+    printf("I'm %d my north: %d my south: %d my west: %d my east: %d\n", rank, north, south, west, east);
+    printf("I'm %d my coords are : %d %d\n", rank, coord[0], coord[1]);
     domain_init();
 
     struct timeval t_start, t_end;
     gettimeofday ( &t_start, NULL );
-
+    create_types();
     for ( int_t iteration = 0; iteration <= max_iteration; iteration++ )
     {
         // TODO 6: Implement border exchange.
         // Hint: Creating MPI datatypes for rows and columns might be useful.
-
+        border_exchange();
         //boundary_condition();
 
-       // time_step();
+        time_step();
 
-        if (( iteration % snapshot_frequency == 0 ) && (rank == 0))
+        if (( iteration % snapshot_frequency == 0 ) )
         {
            printf (
                 "Iteration %ld of %ld (%.2lf%% complete)\n",
@@ -115,7 +123,7 @@ main ( int argc, char **argv )
                 100.0 * (real_t) iteration / (real_t) max_iteration
             );
 
-          //  domain_save ( iteration );
+            domain_save ( iteration );
         }
 
 
@@ -134,6 +142,32 @@ main ( int argc, char **argv )
 }
 
 
+void create_types(void)
+{
+    MPI_Type_create_subarray(2, (int[2]){local_row + 2, local_col + 2}, (int[2]){local_row, local_col}, (int[2]){1, 1}, MPI_ORDER_C, MPI_DOUBLE, &subgrid);
+    MPI_Type_create_subarray(2, (int[2]){N, N}, (int[2]){local_row, local_col}, (int[2]){coord[0] * local_row, coord[1] * local_col}, MPI_ORDER_C, MPI_DOUBLE, &grid);
+
+    MPI_Type_commit(&subgrid);
+    MPI_Type_commit(&grid);
+
+
+
+    //Datatype for one column
+    MPI_Type_create_hvector(local_col,
+                            1, //The block length, which is just one value
+                            (local_col ) *
+                            sizeof(real_t), //Displacement between each value (need to skip one col ahead)
+                            MPI_DOUBLE,
+                            &column_datatype);
+    MPI_Type_commit(&column_datatype);
+    
+    //Datatype for one row
+    MPI_Type_contiguous(local_row+2, 
+                        MPI_DOUBLE,
+                        &row_datatype);
+    MPI_Type_commit(&row_datatype);
+    
+}
 void
 time_step ( void )
 {
@@ -142,9 +176,9 @@ time_step ( void )
     // TODO 3: Update the area of iteration so that each
     // process only iterates over its own subgrid.
 
-    for ( int_t y = 1; y <= M/size; y++ )
+    for ( int_t y = 1; y <= local_col; y++ )
     {
-        for ( int_t x = 1; x <= N/size; x++ )
+        for ( int_t x = 1; x <= local_row; x++ )
         {
             c = T(x, y);
 
@@ -161,6 +195,34 @@ time_step ( void )
     }
 }
 
+void border_exchange( void ){
+    // TODO 7: Implement border exchange.
+        if(rank == 0 || rank == 2){
+         //Sending north, receiving from south
+            MPI_Send(&T(local_row,1), 1, row_datatype, south, 0, comm_cart);
+        }else{
+            MPI_Recv(&T(0,1), 1, row_datatype, north, 0, comm_cart, MPI_STATUS_IGNORE);
+        }
+        if(rank == 1 || rank == 3){
+            //Sending south, receiving from north
+            MPI_Send(&T(1, 1), 1, row_datatype, south, 0, comm_cart);
+        }else{
+            MPI_Recv(&T(local_row+1,1), 1, row_datatype, north, 0, comm_cart, MPI_STATUS_IGNORE);
+        }
+        /*
+        if(rank == 2 || rank == 3){
+            //Sending east, receiving from west
+            MPI_Send(&T(1,0), 1, column_datatype, west, 0, comm_cart);
+        }else{
+            MPI_Recv(&T(1,local_col+1), 1, column_datatype, east, 0, comm_cart, MPI_STATUS_IGNORE);
+        }
+
+        if(rank == 0 || rank == 1){
+            MPI_Send(&T(1,local_col),1, column_datatype, east, 0, comm_cart);
+        }else{
+            MPI_Recv(&T(0,1),1, column_datatype, west, 0, comm_cart, MPI_STATUS_IGNORE);
+        }*/
+}
 
 void
 boundary_condition ( void )
@@ -168,29 +230,36 @@ boundary_condition ( void )
     // TODO 4: Change the application of boundary conditions
     // to match the cartesian topology.
 
-        for ( int_t x = 1; x <= N/dims[0]; x++ )
-    {
-        T(x, 0) = T(x, 2);
-        T(x, M/dims[1]+1) = T(x, M/dims[1]-1);
-    }
-
-    //Only first rank has to manage upper boundary
-    if (rank == 0)
-    {
-        for ( int_t y = 1; y <= M/dims[1]; y++ )
-        {
-            T(0, y) = T(2, y);
+    /*
+            N
+        ________
+        | 0 | 2 |
+     W  |---|---|   E
+        | 1 | 3 |
+        ‾‾‾‾‾‾‾‾
+            S    
+    
+    */
+    if(rank == 0 || rank == 2){
+        for(int_t x = 1;x <= local_col; x++){
+            T(local_row+1, x) = T(local_row-1, x);
+        }
+    }else{
+        for(int_t x = 1;x <= local_col; x++){
+            T(0, x) = T(2, x);
         }
     }
 
-    //Only last rank has to manage lower boundary
-    if (rank == (size - 1))
-    {
-        for ( int_t y = 1; y <= M/dims[1]; y++ )
-        {
-            T(N/dims[0]+1, y) = T(N/dims[0]-1, y);
+    if(rank == 0 || rank == 1){
+        for(int_t y = 1; y<= local_col; y++){
+            T(y, local_row+1) = T(y, local_row-1);
+        }
+    }else{
+        for(int_t y = 1; y<= local_col; y++){
+            T(y, 0) = T(y, 2);
         }
     }
+    
 }
 
 
@@ -204,28 +273,30 @@ domain_init ( void )
     // Hint: you can get useful information from the cartesian communicator.
     // Note: you are allowed to assume that the grid size is divisible by
     // the number of processes.
-    int_t local_col = M/dims[0];
-    int_t local_row = N/dims[1];
-    printf("My local size %d is : %d %d\n", rank, local_col, local_row);
+    local_col = M/dims[0];
+    local_row = N/dims[1];
+    //printf("My local size %d is : %ld %ld\n", rank, local_col, local_row);
    // int local_size = (local_col+2) * (local_row+2);
     temp[0] = malloc ( (local_col+2) * (local_row+2)* sizeof(real_t) );
     temp[1] = malloc ( (local_col+2) * (local_row+2) * sizeof(real_t) );
     thermal_diffusivity = malloc ( (local_col+2) * (local_row+2) * sizeof(real_t) );
-
+    //printf("%ld\n", (local_col+2) * (local_row+2));
     dt = 0.1;
     int_t offset_x = local_row * coord[0];
     int_t offset_y = local_col * coord[1];
-    printf("My %d offset is : %ld %ld\n",rank, offset_x, offset_y);
+    
+    //printf("My %d offset is : %ld %ld\n",rank, offset_x, offset_y);
     for ( int_t y = 1; y <= local_col; y++ )
     {
         for ( int_t x = 1; x <= local_row; x++ )
         {
             real_t temperature = 30 + 30 * sin(((x+ offset_x) + (offset_y + y)) / 20.0);
-            real_t diffusivity = 0.05 + (30 + 30 * sin((N - x + offset_x + offset_y+ y) / 20.0)) / 605.0;
+            real_t diffusivity = 0.05 + (30 + 30 * sin((N - (x + offset_x) + (offset_y+ y)) / 20.0)) / 605.0;
 
             T(x,y) = temperature;
             T_next(x,y) = temperature;
             THERMAL_DIFFUSIVITY(x,y) = diffusivity;
+
         }
     }
 }
@@ -237,21 +308,18 @@ domain_save ( int_t iteration )
     // TODO 5: Use MPI I/O to save the state of the domain to file.
     // Hint: Creating MPI datatypes might be useful.
 
-    int_t index = iteration / snapshot_frequency;
+   int_t index = iteration / snapshot_frequency;
     char filename[256];
-    memset ( filename, 0, 256*sizeof(char) );
-    sprintf ( filename, "data/%.5ld.bin", index );
+    memset(filename, 0, 256 * sizeof(char));
+    sprintf(filename, "data/%.5ld.bin", index);
 
-    FILE *out = fopen ( filename, "wb" );
-    if ( ! out ) {
-        fprintf(stderr, "Failed to open file: %s\n", filename);
-        exit(1);
-    }
-    for ( int_t iter = 1; iter <= N; iter++)
-    {
-        fwrite( temp[0] + (M+2) * iter + 1, sizeof(real_t), N, out );
-    }
-    fclose ( out );
+    MPI_File out;
+    MPI_File_open(comm_cart, filename, MPI_MODE_CREATE | MPI_MODE_WRONLY, MPI_INFO_NULL, &out);
+
+    MPI_File_set_view(out, 0, MPI_DOUBLE, grid, "native", MPI_INFO_NULL);
+    MPI_File_write_all(out, temp[0], 1, subgrid, MPI_STATUS_IGNORE);
+
+    MPI_File_close(&out);
 }
 
 
