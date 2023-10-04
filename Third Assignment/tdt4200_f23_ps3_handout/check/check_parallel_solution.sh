@@ -9,6 +9,6 @@ for i in 1 2 4 8
 do
     echo "Running with $i processes:"
     mpirun -n $i --oversubscribe ./parallel 1>/dev/null
-    ./check/compare_solutions 256 256 data/00050.bin check/references/parallel/00050.bin
+    ./check/compare_solutions 256 256 data/00000.bin check/references/parallel/00000.bin
     echo
 done

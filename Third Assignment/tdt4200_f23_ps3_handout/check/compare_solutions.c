@@ -18,7 +18,7 @@ int main ( int argc, char **argv )
 {
     assert ( argc > 4 );
 
-    int64_t solution_size = (atoi ( argv[1] ) + 2) * (atoi ( argv[2] ) + 2);
+    int64_t solution_size = (atoi ( argv[1] ) ) * (atoi ( argv[2] ) );
 
     double *solution_1 = malloc ( solution_size * sizeof(double) );
     double *solution_2 = malloc ( solution_size * sizeof(double) );
@@ -97,6 +97,7 @@ compare_solutions ( double *solution, double *other_solution, int64_t size )
     {
         if ( !match_double ( solution[i], other_solution[i] ) )
         {
+        //    printf("Error at index %ld: %lf != %lf\n", i, solution[i], other_solution[i]);
             error_count++;
         }
     }
