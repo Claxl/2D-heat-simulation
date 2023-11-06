@@ -1,0 +1,8 @@
+data/
+plots/
+video/
+check/references/
+
+parallel
+sequential
+compare_solutions
