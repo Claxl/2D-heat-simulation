@@ -1,2 +1,2 @@
 # Parallel Computing
-This repo will contains all my exercise with grade about parallel computing
+This repo will contains a 2D heat simulation in different parallel language, leveraging parallel execution
